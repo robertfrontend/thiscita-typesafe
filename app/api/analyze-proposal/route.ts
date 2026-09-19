@@ -4,7 +4,8 @@ import { NextResponse } from "next/server";
 import { PDFParse } from "pdf-parse";
 
 const REVIEW_THRESHOLD = 0.72;
-const MAX_FILE_SIZE = 8 * 1024 * 1024;
+const MAX_FILE_SIZE = 25 * 1024 * 1024;
+const MAX_EXTRACTED_CHARACTERS = 90_000;
 const supportedExtensions = ["pdf", "docx", "txt"];
 
 export const runtime = "nodejs";
@@ -52,7 +53,7 @@ export async function POST(request: Request) {
   const form = await request.formData();
   const file = form.get("document");
   if (!(file instanceof File)) return NextResponse.json({ error: "Choose a PDF, DOCX, or TXT proposal." }, { status: 400 });
-  if (file.size === 0 || file.size > MAX_FILE_SIZE) return NextResponse.json({ error: "Choose a document smaller than 8 MB." }, { status: 400 });
+  if (file.size === 0 || file.size > MAX_FILE_SIZE) return NextResponse.json({ error: "Choose a document smaller than 25 MB." }, { status: 400 });
   const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
   if (!supportedExtensions.includes(extension)) return NextResponse.json({ error: "Supported formats: PDF, DOCX, and TXT." }, { status: 400 });
 
@@ -70,7 +71,7 @@ export async function POST(request: Request) {
     console.error("Proposal document extraction failed", error);
     return NextResponse.json({ error: "We could not read this document. Try a text-based PDF, DOCX, or TXT file." }, { status: 422 });
   }
-  if (proposal.trim().length < 40 || proposal.length > 12000) return NextResponse.json({ error: "The document needs at least 40 readable characters and no more than 12,000." }, { status: 422 });
+  if (proposal.trim().length < 40 || proposal.length > MAX_EXTRACTED_CHARACTERS) return NextResponse.json({ error: "The document needs at least 40 readable characters and no more than 90,000." }, { status: 422 });
   if (!process.env.TYPESAFE_API_KEY) return NextResponse.json(fallback(proposal, startedAt));
 
   try {
