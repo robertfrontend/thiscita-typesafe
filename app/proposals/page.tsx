@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Kicker,
@@ -33,9 +33,17 @@ export default function ProposalsPage() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const activeRequest = useRef<AbortController | null>(null);
+  const requestNumber = useRef(0);
   const t = copy[locale];
 
+  useEffect(() => () => activeRequest.current?.abort(), []);
+
   async function analyze(file: File) {
+    activeRequest.current?.abort();
+    const controller = new AbortController();
+    const currentRequest = ++requestNumber.current;
+    activeRequest.current = controller;
     setLoading(true);
     setError("");
     try {
@@ -44,14 +52,22 @@ export default function ProposalsPage() {
       const response = await fetch("/api/analyze-proposal", {
         method: "POST",
         body: form,
+        signal: controller.signal,
       });
       const body = (await response.json()) as Analysis & { error?: string };
       if (!response.ok) throw new Error(body.error ?? t.error);
-      setAnalysis(body);
+      if (currentRequest === requestNumber.current) setAnalysis(body);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t.error);
+      if (
+        currentRequest === requestNumber.current &&
+        !(cause instanceof DOMException && cause.name === "AbortError")
+      )
+        setError(cause instanceof Error ? cause.message : t.error);
     } finally {
-      setLoading(false);
+      if (currentRequest === requestNumber.current) {
+        setLoading(false);
+        activeRequest.current = null;
+      }
     }
   }
 
@@ -103,6 +119,9 @@ export default function ProposalsPage() {
               id="proposal-document"
               type="file"
               accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+              onClick={(event) => {
+                event.currentTarget.value = "";
+              }}
               onChange={(event) => {
                 const file = event.target.files?.[0] ?? null;
                 setDocument(file);

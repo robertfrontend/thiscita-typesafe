@@ -7,6 +7,7 @@ const REVIEW_THRESHOLD = 0.68;
 const COVERAGE_THRESHOLD = 0.68;
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 const MAX_EXTRACTED_CHARACTERS = 90_000;
+const MAX_ANALYSIS_CHARACTERS = 16_000;
 const supportedExtensions = ["pdf", "docx", "txt"];
 
 export const runtime = "nodejs";
@@ -56,6 +57,54 @@ type Finding = {
   coverageProbability: number | null;
   status: "clear" | "missing" | "review";
 };
+
+const commercialSignals =
+  /(?:\$|€|£|\b(?:scope|deliverable|acceptance|exclusion|price|pricing|rate|fee|deposit|payment|invoice|billing|deadline|timeline|milestone|launch|support|guarantee|unlimited|exclusiv|penalt|liability|alcance|entregable|criterio|exclusi[oó]n|precio|tarifa|dep[oó]sito|pago|factura|cobro|fecha|cronograma|hito|entrega|soporte|garantiz|ilimitad|penalid|responsabilidad|weeks?|months?|days?|semanas?|mes(?:es)?|d[ií]as?)\b|\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b)/i;
+
+function analysisExcerpt(proposal: string) {
+  const normalized = proposal
+    .replace(/\r/g, "")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+  if (normalized.length <= MAX_ANALYSIS_CHARACTERS) return normalized;
+
+  const segments = normalized
+    .split(/\n+|(?<=[.!?;])\s+/)
+    .flatMap((segment) =>
+      segment.length > 900
+        ? (segment.match(/[\s\S]{1,900}(?:\s|$)/g) ?? [segment])
+        : [segment],
+    )
+    .map((text, index) => ({ index, text: text.trim() }))
+    .filter(({ text }) => text.length >= 20);
+
+  const selected = new Set<number>();
+  segments.slice(0, 4).forEach(({ index }) => selected.add(index));
+  segments.slice(-2).forEach(({ index }) => selected.add(index));
+  for (const check of checks) {
+    const matches = segments.filter(({ text }) =>
+      check.coverageKeywords.test(text),
+    );
+    if (matches[0]) selected.add(matches[0].index);
+    if (matches.at(-1)) selected.add(matches.at(-1)!.index);
+  }
+  const generalMatches = segments.filter(({ text }) =>
+    commercialSignals.test(text),
+  );
+  if (generalMatches[0]) selected.add(generalMatches[0].index);
+  if (generalMatches.at(-1)) selected.add(generalMatches.at(-1)!.index);
+
+  let length = 0;
+  const excerpts: string[] = [];
+  for (const { text } of segments.filter(({ index }) => selected.has(index))) {
+    const remaining = MAX_ANALYSIS_CHARACTERS - length;
+    if (remaining <= 0) break;
+    const excerpt = text.slice(0, remaining);
+    excerpts.push(excerpt);
+    length += excerpt.length + 2;
+  }
+  return excerpts.join("\n\n");
+}
 
 function documentSummary(proposal: string) {
   const blocks = proposal
@@ -177,6 +226,8 @@ function fallback(proposal: string, startedAt: number) {
 export async function POST(request: Request) {
   const startedAt = performance.now();
   const form = await request.formData();
+  if (request.signal.aborted)
+    return NextResponse.json({ error: "Analysis cancelled." }, { status: 499 });
   const file = form.get("document");
   if (!(file instanceof File))
     return NextResponse.json(
@@ -232,26 +283,32 @@ export async function POST(request: Request) {
 
   try {
     const client = new TypeSafeClient();
-    const response = await client.systemOne({
-      state: {
-        proposal,
-        purpose:
-          "Commercial proposal pre-send review. This is not legal advice and must not determine contract validity.",
+    const proposalForAnalysis = analysisExcerpt(proposal);
+    const response = await client.systemOne(
+      {
+        state: {
+          proposal: proposalForAnalysis,
+          fullDocumentCharacterCount: proposal.length,
+          analyzedCharacterCount: proposalForAnalysis.length,
+          purpose:
+            "Commercial proposal pre-send review. The proposal may contain selected excerpts from a larger document. This is not legal advice and must not determine contract validity.",
+        },
+        questions: Object.fromEntries(
+          checks.flatMap((check) => {
+            const questions: [string, ReturnType<typeof noul>][] = [
+              [`${check.id}Risk`, noul(check.riskQuestion)],
+            ];
+            if (check.coverageQuestion)
+              questions.push([
+                `${check.id}Coverage`,
+                noul(check.coverageQuestion),
+              ]);
+            return questions;
+          }),
+        ),
       },
-      questions: Object.fromEntries(
-        checks.flatMap((check) => {
-          const questions: [string, ReturnType<typeof noul>][] = [
-            [`${check.id}Risk`, noul(check.riskQuestion)],
-          ];
-          if (check.coverageQuestion)
-            questions.push([
-              `${check.id}Coverage`,
-              noul(check.coverageQuestion),
-            ]);
-          return questions;
-        }),
-      ),
-    });
+      { signal: request.signal },
+    );
     const answers = response.answers as unknown as Record<
       string,
       { noul?: number }
@@ -277,6 +334,11 @@ export async function POST(request: Request) {
       ),
     );
   } catch (error) {
+    if (request.signal.aborted)
+      return NextResponse.json(
+        { error: "Analysis cancelled." },
+        { status: 499 },
+      );
     console.error("TypeSafe proposal analysis failed", error);
     return NextResponse.json(fallback(proposal, startedAt));
   }
