@@ -1,23 +1,329 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
+import {
+  Kicker,
+  languageButton,
+  Masthead,
+  sourceBadge,
+} from "../components/ui";
 import { getService, Locale, services } from "../lib/catalog";
 
-type Navigation = { matches: { serviceId: string; probability: number }[]; primaryServiceId: string | "none"; needsClarification: boolean; clarification: "passport" | "license" | "vehicle" | null; urgency: boolean; source: "typesafe" | "demo"; responseLatencyMs: number };
-const copy = {
-  es: { badge:"Buscador de servicios", title:<>Encuentra tu <em>trámite.</em></>, lede:"Busca servicios oficiales de Boston, Massachusetts y el gobierno federal.", placeholder:"Ej. renovar licencia, permiso de estacionamiento, acta de nacimiento", search:"Buscar", searching:"Buscando…", results:"Resultados", noResults:"No encontramos una ruta clara.", clarify:"Prueba con renovar, reemplazar, primer pasaporte o permiso de estacionamiento.", official:"Abrir sitio oficial", requirements:"Ver requisitos", next:"Siguiente paso", verified:"Verificado", live:"TypeSafe", demo:"Modo demo", privacy:"No guardamos tu búsqueda ni datos personales.", lang:"English", error:"No se pudo completar la búsqueda. Inténtalo otra vez.", resultCount:"resultados oficiales", oneResult:"resultado oficial", suggestions:"Sugerencias", didYouMean:"¿Quisiste buscar…?", urgent:"Parece que tienes poco tiempo. Confirma los plazos y opciones directamente en la fuente oficial.", passportQuestion:"¿Es tu primer pasaporte o una renovación?", licenseQuestion:"¿Necesitas una primera licencia, renovación o reemplazo?", vehicleQuestion:"¿Es un registro nuevo o una renovación?", first:"Primer trámite", renewal:"Renovación", replacement:"Reemplazo", newRegistration:"Registro nuevo" },
-  en: { badge:"Service search", title:<>Find your <em>government service.</em></>, lede:"Search official Boston, Massachusetts, and federal services.", placeholder:"Example: renew license, parking permit, birth certificate", search:"Search", searching:"Searching…", results:"Results", noResults:"We could not find a clear route.", clarify:"Try renew, replace, first passport, or parking permit.", official:"Open official site", requirements:"View requirements", next:"Next action", verified:"Verified", live:"TypeSafe", demo:"Demo mode", privacy:"We do not save your search or personal data.", lang:"Español", error:"We could not complete the search. Try again.", resultCount:"official results", oneResult:"official result", suggestions:"Suggestions", didYouMean:"Did you mean…?", urgent:"It sounds time-sensitive. Confirm timelines and options directly with the official source.", passportQuestion:"Is this your first passport or a renewal?", licenseQuestion:"Do you need a first license, renewal, or replacement?", vehicleQuestion:"Is this a new registration or renewal?", first:"First time", renewal:"Renewal", replacement:"Replacement", newRegistration:"New registration" },
-} as const;
+type Navigation = {
+  matches: { serviceId: string; probability: number }[];
+  primaryServiceId: string | "none";
+  needsClarification: boolean;
+  clarification: "passport" | "license" | "vehicle" | null;
+  urgency: boolean;
+  source: "typesafe" | "demo";
+  responseLatencyMs: number;
+};
+import { copy } from "./content";
 
 export default function Home() {
-  const [locale, setLocale] = useState<Locale>("es"); const [query, setQuery] = useState(""); const [navigation, setNavigation] = useState<Navigation | null>(null); const [loading, setLoading] = useState(false); const [error, setError] = useState("");
+  const [locale, setLocale] = useState<Locale>("es");
+  const [query, setQuery] = useState("");
+  const [navigation, setNavigation] = useState<Navigation | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const t = copy[locale];
-  const results = useMemo(() => navigation?.matches.map((match) => getService(match.serviceId)).filter((service): service is NonNullable<ReturnType<typeof getService>> => Boolean(service)) ?? [], [navigation]);
-  const suggestions = useMemo(() => { const words = query.toLocaleLowerCase().split(/\s+/).filter((word) => word.length > 2); if (!words.length) return []; return services.filter((service) => { const searchable = [service.copy[locale].title, ...service.keywords].join(" ").toLocaleLowerCase(); return words.some((word) => searchable.includes(word)); }).slice(0, 5); }, [locale, query]);
-  async function runSearch(term: string) { if (!term.trim()) return; setLoading(true); setError(""); try { const response = await fetch("/api/interpret", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ message:term }) }); const body = await response.json() as Navigation & { error?:string }; if (!response.ok) throw new Error(body.error ?? t.error); setNavigation(body); if (body.needsClarification && term.length <= 90 && !/@|\d{7,}/.test(term)) { const previous = JSON.parse(localStorage.getItem("thiscita-unresolved-v1") ?? "[]") as string[]; localStorage.setItem("thiscita-unresolved-v1", JSON.stringify([...new Set([...previous, term])].slice(-30))); } } catch (cause) { setError(cause instanceof Error ? cause.message : t.error); } finally { setLoading(false); } }
-  function search(event: FormEvent<HTMLFormElement>) { event.preventDefault(); void runSearch(query); }
-  return <main><header className="masthead"><a className="brand" href="/"><span>OBRA</span><i>β</i></a><span className="demo-tag">Módulo 01 · {t.badge}</span><button className="language" type="button" onClick={() => setLocale(locale === "es" ? "en" : "es")}>{t.lang}</button></header>
-    <section className="search-hero" id="search"><p className="kicker"><span />{t.badge}</p><h1>{t.title}</h1><p>{t.lede}</p><form className="search-box" onSubmit={search}><label className="sr-only" htmlFor="service-search">{t.badge}</label><span aria-hidden="true">⌕</span><input id="service-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t.placeholder} /><button type="submit" disabled={loading}>{loading ? t.searching : t.search}</button></form>{suggestions.length > 0 && <div className="suggestions"><span>{t.suggestions}</span>{suggestions.map((service) => <button type="button" key={service.id} onClick={() => { setQuery(service.copy[locale].title); void runSearch(service.copy[locale].title); }}>{service.copy[locale].title}</button>)}</div>}<small>{t.privacy}</small>{error && <p className="error" role="alert">{error}</p>}</section>
-    {navigation && <section className="results" aria-live="polite"><div className="results-head"><div><h2>{t.results}</h2><p>{results.length} {results.length === 1 ? t.oneResult : t.resultCount}</p></div><span className={navigation.source === "typesafe" ? "source live" : "source"}>{navigation.source === "typesafe" ? t.live : t.demo} · {navigation.responseLatencyMs} ms</span></div>{navigation.urgency && <p className="urgency">{t.urgent}</p>}{navigation.needsClarification && navigation.clarification && <div className="clarification"><strong>{navigation.clarification === "passport" ? t.passportQuestion : navigation.clarification === "license" ? t.licenseQuestion : t.vehicleQuestion}</strong><div>{(navigation.clarification === "license" || navigation.clarification === "passport") && <button type="button" onClick={() => { const term = `${query} ${t.first}`; setQuery(term); void runSearch(term); }}>{t.first}</button>}<button type="button" onClick={() => { const term = `${query} ${t.renewal}`; setQuery(term); void runSearch(term); }}>{t.renewal}</button>{navigation.clarification === "license" && <button type="button" onClick={() => { const term = `${query} ${t.replacement}`; setQuery(term); void runSearch(term); }}>{t.replacement}</button>}{navigation.clarification === "vehicle" && <button type="button" onClick={() => { const term = `${query} ${t.newRegistration}`; setQuery(term); void runSearch(term); }}>{t.newRegistration}</button>}</div></div>}{navigation.needsClarification || results.length === 0 ? <div className="empty-result"><strong>{t.noResults}</strong><p>{t.clarify}</p>{suggestions.length > 0 && <div className="did-you-mean"><span>{t.didYouMean}</span>{suggestions.map((service) => <button type="button" key={service.id} onClick={() => { setQuery(service.copy[locale].title); void runSearch(service.copy[locale].title); }}>{service.copy[locale].title}</button>)}</div>}</div> : <div className="result-list">{results.map((service) => { const item = service.copy[locale]; return <article className="result-card" key={service.id}><div className="result-meta"><span>{service.authority}</span><small>{service.authorityName}</small></div><h3>{item.title}</h3><div className="next-action"><strong>{t.next}</strong><p>{item.nextAction}</p></div><details><summary>{t.requirements}</summary><ul>{item.requirements.map((requirement) => <li key={requirement}>{requirement}</li>)}</ul></details><footer><a href={service.officialUrl} target="_blank" rel="noreferrer">{t.official} ↗</a><small>{t.verified}: {service.lastVerified}</small></footer></article>; })}</div>}</section>}
-  </main>;
+  const results = useMemo(
+    () =>
+      navigation?.matches
+        .map((match) => getService(match.serviceId))
+        .filter(
+          (service): service is NonNullable<ReturnType<typeof getService>> =>
+            Boolean(service),
+        ) ?? [],
+    [navigation],
+  );
+  const suggestions = useMemo(() => {
+    const words = query
+      .toLocaleLowerCase()
+      .split(/\s+/)
+      .filter((word) => word.length > 2);
+    if (!words.length) return [];
+    return services
+      .filter((service) => {
+        const searchable = [service.copy[locale].title, ...service.keywords]
+          .join(" ")
+          .toLocaleLowerCase();
+        return words.some((word) => searchable.includes(word));
+      })
+      .slice(0, 5);
+  }, [locale, query]);
+  async function runSearch(term: string) {
+    if (!term.trim()) return;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/interpret", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: term }),
+      });
+      const body = (await response.json()) as Navigation & { error?: string };
+      if (!response.ok) throw new Error(body.error ?? t.error);
+      setNavigation(body);
+      if (
+        body.needsClarification &&
+        term.length <= 90 &&
+        !/@|\d{7,}/.test(term)
+      ) {
+        const previous = JSON.parse(
+          localStorage.getItem("thiscita-unresolved-v1") ?? "[]",
+        ) as string[];
+        localStorage.setItem(
+          "thiscita-unresolved-v1",
+          JSON.stringify([...new Set([...previous, term])].slice(-30)),
+        );
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t.error);
+    } finally {
+      setLoading(false);
+    }
+  }
+  function search(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void runSearch(query);
+  }
+  const selectTerm = (term: string) => {
+    setQuery(term);
+    void runSearch(term);
+  };
+  const optionClass =
+    "border border-ink bg-paper px-[9px] py-[7px] text-xs font-bold text-ink hover:bg-safety";
+
+  return (
+    <main className="technical-grid min-h-screen px-[5vw] pb-[70px] max-sm:px-5 max-sm:pb-9">
+      <Masthead module={`Módulo 01 · ${t.badge}`}>
+        <button
+          className={`${languageButton} order-2 ml-auto`}
+          type="button"
+          onClick={() => setLocale(locale === "es" ? "en" : "es")}
+        >
+          {t.lang}
+        </button>
+      </Masthead>
+      <section
+        className="relative z-[1] mx-auto mt-[clamp(66px,12vh,110px)] mb-[62px] grid max-w-[930px] justify-items-center text-center max-sm:mt-[70px] max-sm:mb-[46px] max-sm:justify-items-stretch max-sm:text-left"
+        id="search"
+      >
+        <Kicker>{t.badge}</Kicker>
+        <h1 className="m-0 text-[clamp(48px,7.4vw,86px)] leading-[.98] font-semibold tracking-[-.085em] [&_em]:not-italic [&_em]:text-accent max-sm:text-[49px]">
+          {t.title}
+        </h1>
+        <p className="mt-[17px] mb-[25px] max-w-[545px] text-base leading-normal text-[#4d5553]">
+          {t.lede}
+        </p>
+        <form
+          className="flex w-full max-w-[760px] items-center gap-[13px] border-2 border-ink bg-white py-1.5 pr-1.5 pl-3.5 shadow-safety"
+          onSubmit={search}
+        >
+          <label className="sr-only" htmlFor="service-search">
+            {t.badge}
+          </label>
+          <span
+            className="text-[28px] leading-none text-ink"
+            aria-hidden="true"
+          >
+            ⌕
+          </span>
+          <input
+            className="min-w-0 flex-1 border-0 bg-transparent text-base outline-0 placeholder:text-[#90a0a7] max-sm:text-sm"
+            id="service-search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t.placeholder}
+          />
+          <button
+            className="bg-ink px-[18px] py-3 font-mono text-[11px] font-bold uppercase text-white disabled:cursor-not-allowed disabled:opacity-55 max-sm:px-[13px] max-sm:py-[11px]"
+            type="submit"
+            disabled={loading}
+          >
+            {loading ? t.searching : t.search}
+          </button>
+        </form>
+        {suggestions.length > 0 && (
+          <div className="mt-[9px] flex w-full max-w-[760px] flex-wrap items-center gap-[7px] text-left">
+            <span className="text-[11px] text-[#71818a]">{t.suggestions}</span>
+            {suggestions.map((service) => (
+              <button
+                className="border-0 bg-transparent py-1 font-mono text-[11px] font-bold text-ink underline"
+                type="button"
+                key={service.id}
+                onClick={() => selectTerm(service.copy[locale].title)}
+              >
+                {service.copy[locale].title}
+              </button>
+            ))}
+          </div>
+        )}
+        <small className="mt-3 font-mono text-[11px] text-[#59615e]">
+          {t.privacy}
+        </small>
+        {error && (
+          <p className="mt-2.5 text-xs text-[#a14d44]" role="alert">
+            {error}
+          </p>
+        )}
+      </section>
+      {navigation && (
+        <section
+          className="relative z-[1] mx-auto max-w-[930px]"
+          aria-live="polite"
+        >
+          <div className="mb-5 flex items-end justify-between">
+            <div>
+              <h2 className="text-[27px] tracking-[-.04em]">{t.results}</h2>
+              <p className="mt-1 text-xs text-slate">
+                {results.length}{" "}
+                {results.length === 1 ? t.oneResult : t.resultCount}
+              </p>
+            </div>
+            <span
+              className={`${sourceBadge} ${navigation.source === "typesafe" ? "bg-safety" : "bg-[#d6d5cf]"}`}
+            >
+              {navigation.source === "typesafe" ? t.live : t.demo} ·{" "}
+              {navigation.responseLatencyMs} ms
+            </span>
+          </div>
+          {navigation.urgency && (
+            <p className="mb-[13px] border-l-4 border-accent bg-[#ffe5d0] px-[13px] py-[11px] text-xs leading-[1.4] text-[#73532a]">
+              {t.urgent}
+            </p>
+          )}
+          {navigation.needsClarification && navigation.clarification && (
+            <div className="mb-[13px] grid gap-2.5 border-2 border-dashed border-ink bg-[#f6f4ef] p-3.5 text-[13px] text-[#3d5864]">
+              <strong>
+                {navigation.clarification === "passport"
+                  ? t.passportQuestion
+                  : navigation.clarification === "license"
+                    ? t.licenseQuestion
+                    : t.vehicleQuestion}
+              </strong>
+              <div className="flex flex-wrap gap-[7px]">
+                {(navigation.clarification === "license" ||
+                  navigation.clarification === "passport") && (
+                  <button
+                    className={optionClass}
+                    type="button"
+                    onClick={() => selectTerm(`${query} ${t.first}`)}
+                  >
+                    {t.first}
+                  </button>
+                )}
+                <button
+                  className={optionClass}
+                  type="button"
+                  onClick={() => selectTerm(`${query} ${t.renewal}`)}
+                >
+                  {t.renewal}
+                </button>
+                {navigation.clarification === "license" && (
+                  <button
+                    className={optionClass}
+                    type="button"
+                    onClick={() => selectTerm(`${query} ${t.replacement}`)}
+                  >
+                    {t.replacement}
+                  </button>
+                )}
+                {navigation.clarification === "vehicle" && (
+                  <button
+                    className={optionClass}
+                    type="button"
+                    onClick={() => selectTerm(`${query} ${t.newRegistration}`)}
+                  >
+                    {t.newRegistration}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+          {navigation.needsClarification || results.length === 0 ? (
+            <div className="border-2 border-dashed border-ink bg-[#f6f4ef] p-[26px] text-center text-[#58707b]">
+              <strong>{t.noResults}</strong>
+              <p className="mx-auto mt-[7px] max-w-[410px] text-[13px] leading-[1.45] text-[#71818a]">
+                {t.clarify}
+              </p>
+              {suggestions.length > 0 && (
+                <div className="mt-3.5 flex flex-wrap justify-center gap-[7px]">
+                  <span className="text-[11px] text-[#71818a]">
+                    {t.didYouMean}
+                  </span>
+                  {suggestions.map((service) => (
+                    <button
+                      className="border-0 bg-transparent font-mono text-[11px] font-bold text-ink underline"
+                      type="button"
+                      key={service.id}
+                      onClick={() => selectTerm(service.copy[locale].title)}
+                    >
+                      {service.copy[locale].title}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {results.map((service) => {
+                const item = service.copy[locale];
+                return (
+                  <article
+                    className="border-2 border-ink bg-[#f6f4ef] p-5"
+                    key={service.id}
+                  >
+                    <div className="flex flex-wrap items-baseline gap-[7px]">
+                      <span className="bg-safety px-2 py-1 font-mono text-[10px] font-bold">
+                        {service.authority}
+                      </span>
+                      <small className="text-[11px] text-[#75848c]">
+                        {service.authorityName}
+                      </small>
+                    </div>
+                    <h3 className="mt-[11px] mb-1 text-xl tracking-[-.035em]">
+                      {item.title}
+                    </h3>
+                    <div className="my-[15px] border-l-4 border-accent bg-[#ffe5d0] px-3 py-[11px]">
+                      <strong className="font-mono text-[10px]">
+                        {t.next}
+                      </strong>
+                      <p className="mt-[3px] text-xs text-[#466460]">
+                        {item.nextAction}
+                      </p>
+                    </div>
+                    <details>
+                      <summary className="cursor-pointer text-xs font-bold text-[#536b76]">
+                        {t.requirements}
+                      </summary>
+                      <ul className="mt-2.5 grid list-disc gap-1.5 pl-[18px] text-xs leading-[1.4] text-[#52636d]">
+                        {item.requirements.map((requirement) => (
+                          <li key={requirement}>{requirement}</li>
+                        ))}
+                      </ul>
+                    </details>
+                    <footer className="mt-4 flex justify-between gap-3.5 max-sm:flex-col max-sm:items-start">
+                      <a
+                        className="font-mono text-xs font-bold text-ink no-underline"
+                        href={service.officialUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {t.official} ↗
+                      </a>
+                      <small className="text-[10px] text-[#7a898f]">
+                        {t.verified}: {service.lastVerified}
+                      </small>
+                    </footer>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
+    </main>
+  );
 }
