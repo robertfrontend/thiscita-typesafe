@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "thiscita | Boston services navigator",
-  description: "Bilingual navigation to curated Massachusetts and federal government services.",
+  title: "OBRA | Herramientas de revisión",
+  description: "Zona de pruebas para encontrar servicios y revisar propuestas.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
