@@ -122,7 +122,7 @@
     @apply text-accent;
   }
   .agenda-draft > div {
-    @apply grid grid-cols-[1.35fr_1fr_.9fr_.75fr] max-sm:grid-cols-1;
+    @apply grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] max-sm:grid-cols-1;
   }
   .agenda-draft > div > div {
     @apply grid gap-1 border-r border-ink p-[11px] last:border-r-0 max-sm:border-r-0 max-sm:border-b max-sm:last:border-b-0;
@@ -138,6 +138,15 @@
   }
   .agenda-draft .agenda-conflict {
     @apply border-t border-ink bg-[#f3dfc9] text-[#6a3d25];
+  }
+  .agenda-replan {
+    @apply border-t border-ink bg-[#e1eadf] px-[13px] py-[10px];
+  }
+  .agenda-replan strong {
+    @apply font-mono text-[9px] uppercase text-[#31523e];
+  }
+  .agenda-replan p {
+    @apply mt-1 font-mono text-[9px] text-[#405e4a];
   }
   .agenda-draft footer {
     @apply flex justify-end gap-[7px] border-t border-ink p-[9px];
@@ -225,6 +234,10 @@
   }
   .day-plan-list article > div p {
     @apply m-0 font-mono text-[8px] text-[#606762];
+  }
+  .plan-meta,
+  .event-meta {
+    @apply mt-1 block font-mono text-[8px] leading-[1.35] text-[#4d6458];
   }
   .plan-warning {
     @apply col-[2/-1] m-0 font-mono text-[9px] text-[#823e27];

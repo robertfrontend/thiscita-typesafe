@@ -4,10 +4,12 @@ import {
   endTime,
   intentLabel,
   optionsForTime,
+  preparationLabel,
   priorityLabel,
   readableDate,
   readableTime,
 } from "./model";
+import type { ReplanMove } from "./model";
 import type {
   AgendaEvent,
   AgendaReply,
@@ -53,6 +55,7 @@ type DraftPanelProps = {
   live: boolean;
   preview: AgendaEvent | null;
   conflicts: AgendaEvent[];
+  replanMoves: ReplanMove[];
   onDismiss: () => void;
   onConfirm: () => void;
   onPriorityChange: (priority: Priority) => void;
@@ -64,6 +67,7 @@ export function DraftPanel({
   live,
   preview,
   conflicts,
+  replanMoves,
   onDismiss,
   onConfirm,
   onPriorityChange,
@@ -116,6 +120,21 @@ export function DraftPanel({
               </b>
             )}
           </div>
+          {(preview.preparationMinutes ?? 0) > 0 && (
+            <div>
+              <small>Preparación</small>
+              <b>
+                {preparationLabel[preview.preparationKind ?? "none"]} ·{" "}
+                {preview.preparationMinutes} min
+              </b>
+            </div>
+          )}
+          {preview.deadline && (
+            <div>
+              <small>Fecha límite</small>
+              <b>{readableDate(preview.deadline)}</b>
+            </div>
+          )}
         </div>
       ) : (
         <p>Faltan datos para preparar el cambio.</p>
@@ -124,6 +143,17 @@ export function DraftPanel({
         <p className="agenda-conflict">
           Coincide con: {conflicts.map((event) => event.title).join(", ")}
         </p>
+      )}
+      {replanMoves.length > 0 && (
+        <div className="agenda-replan">
+          <strong>Reorganización automática</strong>
+          {replanMoves.map((move) => (
+            <p key={move.id}>
+              {move.title}: {readableTime(move.fromTime)} →{" "}
+              {readableTime(move.toTime)}
+            </p>
+          ))}
+        </div>
       )}
       {pending && !live && (
         <footer>
@@ -213,6 +243,24 @@ export function DayPlan({
                 {readableDate(item.date)} · {item.duration} min ·{" "}
                 {effortLabel[item.effort]}
               </p>
+              {item.preparationMinutes > 0 && (
+                <small className="plan-meta">
+                  {preparationLabel[item.preparationKind]} ·{" "}
+                  {item.preparationMinutes} min antes
+                </small>
+              )}
+              {item.deadline && (
+                <small className="plan-meta">
+                  Límite: {readableDate(item.deadline)}
+                </small>
+              )}
+              {item.dependsOnId && (
+                <small className="plan-meta">
+                  Después de{" "}
+                  {plan.items.find((entry) => entry.id === item.dependsOnId)
+                    ?.title ?? "otra tarea"}
+                </small>
+              )}
             </div>
             <select
               aria-label={`Prioridad de ${item.title}`}
@@ -319,6 +367,17 @@ export function AgendaList({
               <div>
                 <h3>{event.title}</h3>
                 <p>{event.duration} minutos</p>
+                {(event.preparationMinutes ?? 0) > 0 && (
+                  <small className="event-meta">
+                    {preparationLabel[event.preparationKind ?? "none"]} ·{" "}
+                    {event.preparationMinutes} min antes
+                  </small>
+                )}
+                {event.deadline && (
+                  <small className="event-meta">
+                    Límite: {readableDate(event.deadline)}
+                  </small>
+                )}
               </div>
               <div className="event-actions">
                 <select

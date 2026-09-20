@@ -10,6 +10,7 @@ import { NextResponse } from "next/server";
 type Priority = "low" | "medium" | "high";
 type Effort = "light" | "medium" | "deep";
 type Flexibility = "fixed" | "flexible";
+type PreparationKind = "none" | "documents" | "materials" | "review" | "travel";
 type AgendaEvent = {
   id: string;
   title: string;
@@ -17,6 +18,11 @@ type AgendaEvent = {
   time: string;
   duration: number;
   priority?: Priority;
+  flexibility?: Flexibility;
+  preparationKind?: PreparationKind;
+  preparationMinutes?: number;
+  deadline?: string | null;
+  dependsOnId?: string | null;
 };
 type Candidate = {
   id: string;
@@ -25,6 +31,7 @@ type Candidate = {
   date: string;
   parsedTime: { value: string | null; ambiguous: boolean };
   statedDuration: number | null;
+  deadline: string | null;
 };
 type Signals = {
   urgency: number;
@@ -32,6 +39,9 @@ type Signals = {
   effort: number;
   flexibility: Flexibility;
   period: "morning" | "afternoon" | "unknown";
+  preparationKind: PreparationKind;
+  preparationMinutes: number;
+  dependsOnId: string | null;
   confidence: number;
 };
 type PlannedItem = {
@@ -43,6 +53,10 @@ type PlannedItem = {
   priority: Priority;
   effort: Effort;
   flexibility: Flexibility;
+  preparationKind: PreparationKind;
+  preparationMinutes: number;
+  deadline: string | null;
+  dependsOnId: string | null;
   confidence: number;
   conflict: string | null;
   needsReview: boolean;
@@ -110,6 +124,20 @@ function dateFromMessage(message: string) {
   return candidates.sort((a, b) => b.index - a.index)[0]?.value ?? null;
 }
 
+function deadlineFromMessage(message: string) {
+  const marker = message.search(
+    /\b(?:antes\s+de(?:l)?|a\s+m[aá]s\s+tardar|fecha\s+l[ií]mite|vence|vencimiento|before|by|deadline|due)\b/i,
+  );
+  return marker >= 0 ? dateFromMessage(message.slice(marker)) : null;
+}
+
+function scheduledDateFromMessage(message: string) {
+  const marker = message.search(
+    /\b(?:antes\s+de(?:l)?|a\s+m[aá]s\s+tardar|fecha\s+l[ií]mite|vence|vencimiento|before|by|deadline|due)\b/i,
+  );
+  return dateFromMessage(marker >= 0 ? message.slice(0, marker) : message);
+}
+
 function timeFromMessage(message: string) {
   const text = message.toLowerCase();
   if (/\b(mediodía|mediodia|noon)\b/.test(text))
@@ -174,6 +202,10 @@ function taskTitle(text: string) {
       " ",
     )
     .replace(
+      /\b(?:antes\s+de(?:l)?|a\s+m[aá]s\s+tardar|fecha\s+l[ií]mite|vence|vencimiento|before|by|deadline|due)\s+(?:hoy|mañana|manana|tomorrow|lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|monday|tuesday|wednesday|thursday|friday|saturday|sunday|20\d{2}-\d{1,2}-\d{1,2})\b/gi,
+      " ",
+    )
+    .replace(
       /\b(hoy|mañana|manana|tomorrow|lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo)\b/gi,
       " ",
     )
@@ -212,7 +244,7 @@ function splitCandidates(
 ) {
   // Explicit punctuation is handled first. TypeSafe boundary recovery is used only
   // when a brain dump appears to contain multiple tasks without separators.
-  const globalDate = dateFromMessage(message) ?? isoDate(new Date());
+  const globalDate = scheduledDateFromMessage(message) ?? isoDate(new Date());
   const cleaned = brainDumpText(message);
   const explicitParts = cleaned.split(
     /\s*(?:,|;|\.\s+|\by luego\b|\bluego\b|\btambién\b|\btambien\b|\by\b)\s*/i,
@@ -233,9 +265,10 @@ function splitCandidates(
       id: `task_${index}`,
       source,
       title: taskTitle(source),
-      date: dateFromMessage(source) ?? globalDate,
+      date: scheduledDateFromMessage(source) ?? globalDate,
       parsedTime: timeFromMessage(source),
       statedDuration: durationFromMessage(source),
+      deadline: deadlineFromMessage(source),
     }))
     .filter((item): item is Candidate => Boolean(item.title));
 }
@@ -298,12 +331,25 @@ function heuristicSignals(candidate: Candidate): Signals {
     : /llamar|pagar|comprar/.test(text)
       ? 0
       : 1;
+  const preparationKind: PreparationKind =
+    /document|formulario|identificaci[oó]n/.test(text)
+      ? "documents"
+      : /material|equipo|herramienta/.test(text)
+        ? "materials"
+        : /revis|leer|estudi|propuesta|presentaci[oó]n/.test(text)
+          ? "review"
+          : /viaj|traslado|manejar|en persona/.test(text)
+            ? "travel"
+            : "none";
   return {
     urgency,
     importance,
     effort,
     flexibility: candidate.parsedTime.value ? "fixed" : "flexible",
     period: "unknown",
+    preparationKind,
+    preparationMinutes: preparationKind === "none" ? 0 : 30,
+    dependsOnId: null,
     confidence: 0.72,
   };
 }
@@ -335,8 +381,8 @@ function schedule(
   signalMap: Record<string, Signals>,
   events: AgendaEvent[],
 ) {
-  // Scheduling remains deterministic: fixed times win, then open slots are searched
-  // in 15-minute increments without overlapping saved or newly planned events.
+  // Scheduling remains deterministic. TypeSafe supplies semantic signals; code owns
+  // dependency ordering, deadline enforcement, preparation buffers, and open slots.
   const items = candidates.map((candidate) => {
     const signals = signalMap[candidate.id];
     const effort = effortFromScore(signals.effort);
@@ -354,78 +400,136 @@ function schedule(
   });
   const busy = events.map((event) => ({
     date: event.date,
-    start: minutes(event.time),
+    start: minutes(event.time) - (event.preparationMinutes ?? 0),
     end: minutes(event.time) + event.duration,
     title: event.title,
   }));
   const planned: PlannedItem[] = [];
-  const ordered = [...items].sort(
-    (a, b) =>
-      Number(Boolean(b.resolved.value)) - Number(Boolean(a.resolved.value)) ||
-      priorityRank[b.priority] - priorityRank[a.priority] ||
-      b.signals.effort - a.signals.effort,
-  );
+  const pending = [...items];
+  const ordered: typeof items = [];
+  // A small topological pass places prerequisites before their dependents. Invalid
+  // cycles fall back to the normal priority order instead of blocking the plan.
+  while (pending.length) {
+    const ready = pending.filter(
+      (item) =>
+        !item.signals.dependsOnId ||
+        !pending.some(
+          (candidate) => candidate.candidate.id === item.signals.dependsOnId,
+        ),
+    );
+    const pool = ready.length ? ready : pending;
+    pool.sort(
+      (a, b) =>
+        Number(Boolean(b.resolved.value)) - Number(Boolean(a.resolved.value)) ||
+        Number(Boolean(b.candidate.deadline)) -
+          Number(Boolean(a.candidate.deadline)) ||
+        (a.candidate.deadline ?? "9999-12-31").localeCompare(
+          b.candidate.deadline ?? "9999-12-31",
+        ) ||
+        priorityRank[b.priority] - priorityRank[a.priority] ||
+        b.signals.effort - a.signals.effort,
+    );
+    const next = pool[0];
+    ordered.push(next);
+    pending.splice(pending.indexOf(next), 1);
+  }
   for (const item of ordered) {
     const { candidate, signals, duration, priority, effort, resolved } = item;
     let time = resolved.value;
     let conflict: string | null = null;
+    let date = candidate.date;
+    const preparationMinutes = signals.preparationMinutes;
+    const dependency = signals.dependsOnId
+      ? planned.find((entry) => entry.id === signals.dependsOnId)
+      : null;
     if (time) {
       const start = minutes(time);
       conflict =
         busy.find(
           (slot) =>
-            slot.date === candidate.date &&
-            start < slot.end &&
+            slot.date === date &&
+            start - preparationMinutes < slot.end &&
             start + duration > slot.start,
         )?.title ?? null;
+      if (
+        dependency?.time &&
+        `${date}T${time}` <
+          `${dependency.date}T${clock(minutes(dependency.time) + dependency.duration)}`
+      )
+        conflict = dependency.title;
     }
     if (!time) {
       const today = isoDate(new Date());
       const now = new Date();
-      const earliest =
-        candidate.date === today
-          ? Math.max(
-              8 * 60,
-              Math.ceil((now.getHours() * 60 + now.getMinutes()) / 15) * 15,
-            )
-          : priority === "high" || effort === "deep"
+      if (dependency && date < dependency.date) date = dependency.date;
+      for (let day = 0; day < 7 && !time; day += 1) {
+        if (candidate.deadline && date > candidate.deadline) break;
+        const normalStart =
+          priority === "high" || effort === "deep"
             ? 8 * 60
             : priority === "medium"
               ? 10 * 60
               : 14 * 60;
-      for (let start = earliest; start + duration <= 20 * 60; start += 15) {
-        if (
-          !busy.some(
-            (slot) =>
-              slot.date === candidate.date &&
-              start < slot.end &&
-              start + duration > slot.start,
-          )
-        ) {
-          time = clock(start);
-          break;
+        let earliest =
+          date === today
+            ? Math.max(
+                normalStart,
+                Math.ceil((now.getHours() * 60 + now.getMinutes()) / 15) * 15,
+              )
+            : normalStart;
+        if (dependency?.time && dependency.date === date)
+          earliest = Math.max(
+            earliest,
+            minutes(dependency.time) + dependency.duration,
+          );
+        earliest = Math.max(earliest, 8 * 60 + preparationMinutes);
+        for (let start = earliest; start + duration <= 20 * 60; start += 15) {
+          if (
+            !busy.some(
+              (slot) =>
+                slot.date === date &&
+                start - preparationMinutes < slot.end &&
+                start + duration > slot.start,
+            )
+          ) {
+            time = clock(start);
+            break;
+          }
+        }
+        if (!time) {
+          const next = new Date(`${date}T12:00:00`);
+          next.setDate(next.getDate() + 1);
+          date = isoDate(next);
         }
       }
     }
     if (time && !conflict)
       busy.push({
-        date: candidate.date,
-        start: minutes(time),
+        date,
+        start: minutes(time) - preparationMinutes,
         end: minutes(time) + duration,
         title: candidate.title,
       });
     planned.push({
       id: candidate.id,
       title: candidate.title,
-      date: candidate.date,
+      date,
       time,
       duration,
       priority,
       effort,
       flexibility: candidate.parsedTime.value ? "fixed" : signals.flexibility,
+      preparationKind: signals.preparationKind,
+      preparationMinutes,
+      deadline: candidate.deadline,
+      dependsOnId: signals.dependsOnId,
       confidence: signals.confidence,
       conflict,
-      needsReview: resolved.needsReview || !time || Boolean(conflict),
+      needsReview:
+        resolved.needsReview ||
+        !time ||
+        Boolean(conflict) ||
+        Boolean(candidate.deadline && date > candidate.deadline),
     });
   }
   return planned.sort((a, b) =>
@@ -573,7 +677,7 @@ export async function POST(request: Request) {
       items: schedule(candidates, signalMap, events),
       source: "demo" as const,
       responseLatencyMs: Math.round(performance.now() - startedAt),
-      decisionCount: boundaryDecisionCount + candidates.length * 4,
+      decisionCount: boundaryDecisionCount + candidates.length * 8,
       usage: boundaryUsage,
     };
   };
@@ -583,6 +687,15 @@ export async function POST(request: Request) {
     // TypeSafe evaluates planning signals, but does not choose a calendar slot or
     // mutate the user's agenda. The scheduler below owns those actions.
     for (const candidate of candidates) {
+      const dependencyCriteria = Object.fromEntries([
+        [
+          "none",
+          "This task has no explicit prerequisite among the other task candidates.",
+        ],
+        ...candidates
+          .filter((other) => other.id !== candidate.id)
+          .map((other) => [other.id, `${other.title}: ${other.source}`]),
+      ]);
       questions[`${candidate.id}_urgency`] = score(
         `How urgent is completing \`${candidate.id}\` on its stated day? Judge time pressure and consequence of delay, not general importance.`,
         [
@@ -622,17 +735,42 @@ export async function POST(request: Request) {
           unknown: "The period is not safely inferable.",
         },
       );
+      questions[`${candidate.id}_preparation_kind`] = choice(
+        `What preparation is directly stated or strongly implied before \`${candidate.id}\`? Choose none rather than inventing preparation.`,
+        {
+          none: "No meaningful preparation is implied.",
+          documents: "Gather forms, identification, records, or documents.",
+          materials:
+            "Gather equipment, tools, supplies, or physical materials.",
+          review: "Read, research, rehearse, or review information.",
+          travel: "Allow travel time to reach an in-person commitment.",
+        },
+      );
+      questions[`${candidate.id}_preparation_minutes`] = choice(
+        `How much preparation time should be reserved immediately before \`${candidate.id}\`? Choose zero when preparation is not supported by the message.`,
+        {
+          "0": "No preparation block.",
+          "15": "Quick preparation.",
+          "30": "Normal preparation.",
+          "60": "Substantial preparation.",
+        },
+      );
+      questions[`${candidate.id}_dependency`] = choice(
+        `Which other task candidate must be completed before \`${candidate.id}\`? Choose none unless the user's wording makes the dependency explicit.`,
+        dependencyCriteria,
+      );
     }
     const result = await client.systemOne({
       state: {
         userMessage: message,
         taskCandidates: candidates.map(
-          ({ id, source, title, date, parsedTime }) => ({
+          ({ id, source, title, date, parsedTime, deadline }) => ({
             id,
             source,
             title,
             date,
             statedTime: parsedTime.value,
+            deadline,
           }),
         ),
         currentAgenda: events,
@@ -653,6 +791,14 @@ export async function POST(request: Request) {
       const effort = answers[`${candidate.id}_effort`];
       const flexibility = answers[`${candidate.id}_flexibility`];
       const period = answers[`${candidate.id}_period`];
+      const preparationKind = answers[`${candidate.id}_preparation_kind`];
+      const preparationMinutes = answers[`${candidate.id}_preparation_minutes`];
+      const dependency = answers[`${candidate.id}_dependency`];
+      const kind = ["documents", "materials", "review", "travel"].includes(
+        preparationKind?.choice ?? "",
+      )
+        ? (preparationKind.choice as PreparationKind)
+        : "none";
       signalMap[candidate.id] = {
         urgency: urgency?.score ?? 1,
         importance: importance?.score ?? 1,
@@ -662,11 +808,25 @@ export async function POST(request: Request) {
           period?.choice === "morning" || period?.choice === "afternoon"
             ? period.choice
             : "unknown",
+        preparationKind: kind,
+        preparationMinutes:
+          kind === "none"
+            ? 0
+            : Number(preparationMinutes?.choice ?? 0) ||
+              (kind === "documents" || kind === "materials" ? 15 : 30),
+        dependsOnId:
+          dependency?.choice &&
+          candidates.some((item) => item.id === dependency.choice)
+            ? dependency.choice
+            : null,
         confidence: Math.min(
           urgency?.confidence ?? 0,
           importance?.confidence ?? 0,
           effort?.confidence ?? 0,
           flexibility?.confidence ?? 0,
+          preparationKind?.confidence ?? 0,
+          preparationMinutes?.confidence ?? 0,
+          dependency?.confidence ?? 0,
         ),
       };
     }
@@ -674,7 +834,7 @@ export async function POST(request: Request) {
       items: schedule(candidates, signalMap, events),
       source: "typesafe",
       responseLatencyMs: Math.round(performance.now() - startedAt),
-      decisionCount: boundaryDecisionCount + candidates.length * 5,
+      decisionCount: boundaryDecisionCount + candidates.length * 8,
       usage: {
         input_tokens: boundaryUsage.input_tokens + result.usage.input_tokens,
         output_tokens: boundaryUsage.output_tokens + result.usage.output_tokens,

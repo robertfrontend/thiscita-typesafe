@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 type Intent = "create" | "update" | "cancel" | "list" | "plan" | "unknown";
 type Priority = "low" | "medium" | "high";
+type PreparationKind = "none" | "documents" | "materials" | "review" | "travel";
 type AgendaEvent = {
   id: string;
   title: string;
@@ -10,6 +11,11 @@ type AgendaEvent = {
   time: string;
   duration: number;
   priority?: Priority;
+  flexibility?: "fixed" | "flexible";
+  preparationKind?: PreparationKind;
+  preparationMinutes?: number;
+  deadline?: string | null;
+  dependsOnId?: string | null;
 };
 
 const intentCriteria = {
@@ -29,6 +35,18 @@ const priorityCriteria = {
   medium:
     "A normal appointment, meeting, errand, or commitment. Use this as the default when there is no strong reason for low or high.",
   high: "Urgent, time-sensitive, tied to a deadline, health need, critical obligation, or serious consequence if missed.",
+} as const;
+
+const preparationCriteria = {
+  none: "No meaningful preparation is implied.",
+  documents:
+    "The person likely needs to gather forms, identification, records, or other documents first.",
+  materials:
+    "The person likely needs to gather tools, equipment, supplies, or physical materials first.",
+  review:
+    "The person likely needs to read, research, rehearse, or review information first.",
+  travel:
+    "The main preparation is allowing travel time to reach an in-person commitment.",
 } as const;
 
 function isoDate(date: Date) {
@@ -134,6 +152,20 @@ function dateFromMessage(message: string) {
   return candidates.sort((a, b) => b.index - a.index)[0]?.value ?? null;
 }
 
+function deadlineFromMessage(message: string) {
+  const marker = message.search(
+    /\b(?:antes\s+de(?:l)?|a\s+m[aá]s\s+tardar|fecha\s+l[ií]mite|vence|vencimiento|before|by|deadline|due)\b/i,
+  );
+  return marker >= 0 ? dateFromMessage(message.slice(marker)) : null;
+}
+
+function scheduledDateFromMessage(message: string) {
+  const marker = message.search(
+    /\b(?:antes\s+de(?:l)?|a\s+m[aá]s\s+tardar|fecha\s+l[ií]mite|vence|vencimiento|before|by|deadline|due)\b/i,
+  );
+  return dateFromMessage(marker >= 0 ? message.slice(0, marker) : message);
+}
+
 function timeFromMessage(message: string) {
   // A 1–12 hour without an explicit period remains ambiguous. The UI asks the user
   // to confirm rather than silently choosing morning or afternoon.
@@ -200,6 +232,10 @@ function titleFromMessage(message: string) {
     " ",
   );
   title = title.replace(
+    /\b(?:antes\s+de(?:l)?|a\s+m[aá]s\s+tardar|fecha\s+l[ií]mite|vence|vencimiento|before|by|deadline|due)\s+(?:hoy|mañana|manana|tomorrow|lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|monday|tuesday|wednesday|thursday|friday|saturday|sunday|20\d{2}-\d{1,2}-\d{1,2})\b/gi,
+    " ",
+  );
+  title = title.replace(
     /\b(hoy|today|mañana|manana|tomorrow|pasado mañana|pasado manana|day after tomorrow)\b/gi,
     " ",
   );
@@ -217,6 +253,10 @@ function titleFromMessage(message: string) {
       /\b(?:por|durante)\s+\d+(?:[.,]\d+)?\s*(?:horas?|hours?|minutos?|mins?|minutes?)\b/gi,
       " ",
     );
+  title = title.replace(
+    /[,;]?\s*\b(?:debo|tengo que|necesito)\s+(?:llevar|traer|preparar|revisar)\b.*$/i,
+    " ",
+  );
   title = title
     .replace(
       /[,;]?\s*\b(?:es\s+)?(?:urgente|importante|opcional|flexible|sin prisa|urgent|important|optional|no rush)\b/gi,
@@ -316,6 +356,26 @@ function fallbackPriority(message: string, intent: Intent): Priority | null {
   return "medium";
 }
 
+function fallbackPreparation(message: string): {
+  kind: PreparationKind;
+  minutes: number;
+} {
+  const text = message.toLowerCase();
+  const stated = text.match(
+    /(?:preparar|preparaci[oó]n|antes)\s+(?:por\s+)?(\d{1,3})\s*(?:minutos?|mins?|minutes?)/,
+  );
+  const minutes = stated ? Math.min(120, Number(stated[1])) : 30;
+  if (/document|formulario|identificaci[oó]n|pasaporte|records?/.test(text))
+    return { kind: "documents", minutes };
+  if (/material|equipo|herramienta|suministro|supplies|equipment/.test(text))
+    return { kind: "materials", minutes };
+  if (/revis|leer|estudi|research|presentaci[oó]n|propuesta/.test(text))
+    return { kind: "review", minutes };
+  if (/viaj|traslado|manejar|conducir|travel|drive|en persona/.test(text))
+    return { kind: "travel", minutes };
+  return { kind: "none", minutes: 0 };
+}
+
 function makeResponse(
   message: string,
   events: AgendaEvent[],
@@ -325,6 +385,9 @@ function makeResponse(
   targetProbability: number,
   priority: Priority | null,
   priorityProbability: number,
+  preparationKind: PreparationKind,
+  preparationMinutes: number,
+  dependsOnId: string | null,
   source: "typesafe" | "demo",
   startedAt: number,
   probabilities: Record<string, number>,
@@ -332,7 +395,10 @@ function makeResponse(
 ) {
   // TypeSafe supplies intent and target judgments; deterministic parsers own dates,
   // times, duration, and the final decision to request clarification.
-  const date = dateFromMessage(message);
+  const deadline = deadlineFromMessage(message);
+  const date =
+    scheduledDateFromMessage(message) ??
+    (intent === "create" && deadline ? isoDate(new Date()) : null);
   const parsedTime = timeFromMessage(message);
   const time = parsedTime.value;
   const statedDuration = durationFromMessage(message);
@@ -360,6 +426,10 @@ function makeResponse(
     duration,
     priority,
     priorityProbability,
+    preparationKind,
+    preparationMinutes,
+    deadline,
+    dependsOnId,
     needsClarification,
     source,
     responseLatencyMs: Math.round(performance.now() - startedAt),
@@ -400,6 +470,7 @@ export async function POST(request: Request) {
     const intent = fallbackIntent(message);
     const target = fallbackTarget(message, events);
     const priority = fallbackPriority(message, intent);
+    const preparation = fallbackPreparation(message);
     return makeResponse(
       message,
       events,
@@ -409,6 +480,14 @@ export async function POST(request: Request) {
       target ? 0.78 : 0,
       priority,
       priority ? 0.78 : 0,
+      preparation.kind,
+      preparation.minutes,
+      /\b(despu[eé]s\s+de|luego\s+de|depende\s+de|after)\b/i.test(message)
+        ? fallbackTarget(
+            message,
+            events.filter((event) => event.id !== target),
+          )
+        : null,
       "demo",
       startedAt,
       Object.fromEntries(
@@ -424,8 +503,16 @@ export async function POST(request: Request) {
     const targetCriteria: Record<string, string> = {
       none: "No existing event is the target of this instruction.",
     };
+    const dependencyCriteria: Record<string, string> = {
+      none: "No current calendar event must be completed before this event.",
+      unclear:
+        "A dependency may be mentioned, but no current calendar event clearly matches it.",
+    };
     for (const event of events)
       targetCriteria[`event_${event.id}`] =
+        `${event.title}, scheduled ${event.date} at ${event.time}.`;
+    for (const event of events)
+      dependencyCriteria[`event_${event.id}`] =
         `${event.title}, scheduled ${event.date} at ${event.time}.`;
     if (events.length === 0)
       targetCriteria.new_event =
@@ -448,6 +535,23 @@ export async function POST(request: Request) {
       priorityChange: choice(
         "Is the user explicitly changing an existing event's priority? Choose keep unless the message directly requests low, medium, or high priority.",
         { keep: "No explicit priority change.", ...priorityCriteria },
+      ),
+      preparationKind: choice(
+        "If the user is creating or changing an event, what preparation is directly stated or strongly implied? Choose none instead of inventing preparation.",
+        preparationCriteria,
+      ),
+      preparationMinutes: choice(
+        "If preparation is directly stated or strongly implied, how much time should be reserved immediately before the event? Choose zero when none is needed.",
+        {
+          "0": "No preparation block is needed.",
+          "15": "A quick preparation of about 15 minutes.",
+          "30": "A normal preparation of about 30 minutes.",
+          "60": "Substantial preparation of about one hour.",
+        },
+      ),
+      dependency: choice(
+        "If the user says this event can happen only after a current calendar event, which event is that prerequisite? Choose none unless the dependency is explicit.",
+        dependencyCriteria,
       ),
     };
     const client = new TypeSafeClient();
@@ -482,6 +586,19 @@ export async function POST(request: Request) {
           ? result.answers.priorityChange.choice
           : null;
     const priority = priorityChoice as Priority | null;
+    const preparationKind = result.answers.preparationKind
+      .choice as PreparationKind;
+    const preparationMinutes =
+      preparationKind === "none"
+        ? 0
+        : Number(result.answers.preparationMinutes.choice) ||
+          (preparationKind === "documents" || preparationKind === "materials"
+            ? 15
+            : 30);
+    const dependencyChoice = result.answers.dependency.choice;
+    const dependsOnId = dependencyChoice.startsWith("event_")
+      ? dependencyChoice.slice(6)
+      : null;
     const priorityProbability = priority
       ? intent === "create"
         ? result.answers.inferredPriority.probabilities[priority]
@@ -497,6 +614,9 @@ export async function POST(request: Request) {
         result.answers.target.probabilities[targetChoice],
         priority,
         priorityProbability,
+        preparationKind,
+        preparationMinutes,
+        dependsOnId,
         "typesafe",
         startedAt,
         result.answers.intent.probabilities as Record<string, number>,

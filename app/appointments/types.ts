@@ -3,6 +3,8 @@ export type Intent =
 export type Priority = "low" | "medium" | "high";
 export type Effort = "light" | "medium" | "deep";
 export type Flexibility = "fixed" | "flexible";
+export type PreparationKind =
+  "none" | "documents" | "materials" | "review" | "travel";
 
 export type AgendaEvent = {
   id: string;
@@ -13,6 +15,10 @@ export type AgendaEvent = {
   priority: Priority;
   effort?: Effort;
   flexibility?: Flexibility;
+  preparationKind?: PreparationKind;
+  preparationMinutes?: number;
+  deadline?: string | null;
+  dependsOnId?: string | null;
 };
 
 export type AgendaReply = {
@@ -28,6 +34,10 @@ export type AgendaReply = {
   duration: number | null;
   priority: Priority | null;
   priorityProbability: number;
+  preparationKind: PreparationKind;
+  preparationMinutes: number;
+  deadline: string | null;
+  dependsOnId: string | null;
   needsClarification: boolean;
   source: "typesafe" | "demo";
   responseLatencyMs: number;
@@ -43,6 +53,10 @@ export type PlannedItem = {
   priority: Priority;
   effort: Effort;
   flexibility: Flexibility;
+  preparationKind: PreparationKind;
+  preparationMinutes: number;
+  deadline: string | null;
+  dependsOnId: string | null;
   confidence: number;
   conflict: string | null;
   needsReview: boolean;

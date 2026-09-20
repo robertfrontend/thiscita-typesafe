@@ -30,6 +30,8 @@ import {
   intentLabel,
   nextPlanTime,
   readableTime,
+  replanAgenda,
+  replanDraftItems,
   sortEvents,
   sortPlanItems,
   toMinutes,
@@ -79,6 +81,11 @@ export default function AppointmentsPage() {
             (JSON.parse(saved) as AgendaEvent[]).map((event) => ({
               ...event,
               priority: event.priority ?? "medium",
+              flexibility: event.flexibility ?? "fixed",
+              preparationKind: event.preparationKind ?? "none",
+              preparationMinutes: event.preparationMinutes ?? 0,
+              deadline: event.deadline ?? null,
+              dependsOnId: event.dependsOnId ?? null,
             })),
           ),
         );
@@ -126,6 +133,14 @@ export default function AppointmentsPage() {
       time: reply.time ?? previous.time,
       duration: reply.duration ?? previous.duration,
       priority: reply.priority ?? previous.priority,
+      preparationKind:
+        reply.preparationKind === "none"
+          ? previous.preparationKind
+          : reply.preparationKind,
+      preparationMinutes:
+        reply.preparationMinutes || previous.preparationMinutes,
+      deadline: reply.deadline ?? previous.deadline,
+      dependsOnId: reply.dependsOnId ?? previous.dependsOnId,
       targetEventId: null,
     };
     return {
@@ -177,6 +192,12 @@ export default function AppointmentsPage() {
         time: item.time,
         duration: item.duration,
         priority: item.priority,
+        effort: item.effort,
+        flexibility: item.flexibility,
+        preparationKind: item.preparationKind,
+        preparationMinutes: item.preparationMinutes,
+        deadline: item.deadline,
+        dependsOnId: item.dependsOnId,
       }));
   }
 
@@ -348,6 +369,10 @@ export default function AppointmentsPage() {
         priority: reply.priority ?? "medium",
         effort: "medium",
         flexibility: reply.time ? "fixed" : "flexible",
+        preparationKind: reply.preparationKind,
+        preparationMinutes: reply.preparationMinutes,
+        deadline: reply.deadline,
+        dependsOnId: reply.dependsOnId,
         confidence: reply.intentProbability,
         conflict: null,
         needsReview: !time,
@@ -518,23 +543,34 @@ export default function AppointmentsPage() {
     if (!preview) return;
     if (pending.intent === "create") {
       const created = { ...preview, id: crypto.randomUUID() };
-      setEvents((items) => sortEvents([...items, created]));
-      setMessages((items) => [
-        ...items,
-        { role: "assistant", text: `Guardé “${created.title}” en tu lista.` },
-      ]);
-    }
-    if (pending.intent === "update" && pending.targetEventId) {
-      setEvents((items) =>
+      const replanned = replanAgenda(eventsRef.current, {
+        ...created,
+        id: "draft",
+      });
+      setEvents(
         sortEvents(
-          items.map((event) =>
-            event.id === pending.targetEventId ? preview : event,
+          replanned.events.map((event) =>
+            event.id === "draft" ? created : event,
           ),
         ),
       );
       setMessages((items) => [
         ...items,
-        { role: "assistant", text: `Actualicé “${preview.title}”.` },
+        {
+          role: "assistant",
+          text: `Guardé “${created.title}”${replanned.moves.length ? ` y reorganicé ${replanned.moves.length} tarea${replanned.moves.length === 1 ? "" : "s"}` : ""}.`,
+        },
+      ]);
+    }
+    if (pending.intent === "update" && pending.targetEventId) {
+      const replanned = replanAgenda(eventsRef.current, preview);
+      setEvents(replanned.events);
+      setMessages((items) => [
+        ...items,
+        {
+          role: "assistant",
+          text: `Actualicé “${preview.title}”${replanned.moves.length ? ` y reorganicé ${replanned.moves.length} tarea${replanned.moves.length === 1 ? "" : "s"}` : ""}.`,
+        },
       ]);
     }
     if (pending.intent === "cancel" && pending.targetEventId) {
@@ -564,8 +600,12 @@ export default function AppointmentsPage() {
       plan
         ? {
             ...plan,
-            items: plan.items.map((item) =>
-              item.id === id ? { ...item, ...changes } : item,
+            items: replanDraftItems(
+              plan.items.map((item) =>
+                item.id === id ? { ...item, ...changes } : item,
+              ),
+              id,
+              eventsRef.current,
             ),
           }
         : plan,
@@ -574,8 +614,11 @@ export default function AppointmentsPage() {
 
   function confirmPlan() {
     if (!pendingPlan || pendingPlan.items.some((item) => !item.time)) return;
+    const idMap = new Map(
+      pendingPlan.items.map((item) => [item.id, crypto.randomUUID()]),
+    );
     const created = pendingPlan.items.map((item) => ({
-      id: crypto.randomUUID(),
+      id: idMap.get(item.id) as string,
       title: item.title,
       date: item.date,
       time: item.time as string,
@@ -583,6 +626,12 @@ export default function AppointmentsPage() {
       priority: item.priority,
       effort: item.effort,
       flexibility: item.flexibility,
+      preparationKind: item.preparationKind,
+      preparationMinutes: item.preparationMinutes,
+      deadline: item.deadline,
+      dependsOnId: item.dependsOnId
+        ? (idMap.get(item.dependsOnId) ?? item.dependsOnId)
+        : null,
     }));
     setEvents((items) => sortEvents([...items, ...created]));
     setMessages((items) => [
@@ -703,6 +752,13 @@ export default function AppointmentsPage() {
         end > toMinutes(event.time),
     );
   }, [activeDraft, events, preview]);
+  const replanPreview = useMemo(
+    () =>
+      preview && activeDraft?.intent !== "cancel"
+        ? replanAgenda(events, preview)
+        : null,
+    [activeDraft?.intent, events, preview],
+  );
 
   return (
     <main className="personal-agenda-page">
@@ -744,7 +800,11 @@ export default function AppointmentsPage() {
               pending={pending}
               live={Boolean(liveDraft)}
               preview={preview}
-              conflicts={conflicts}
+              conflicts={conflicts.filter(
+                (event) =>
+                  !replanPreview?.moves.some((move) => move.id === event.id),
+              )}
+              replanMoves={replanPreview?.moves ?? []}
               onDismiss={() => setPending(null)}
               onConfirm={confirmPending}
               onPriorityChange={changePendingPriority}
