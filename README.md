@@ -36,6 +36,10 @@ TypeSafe does not generate government requirements. That information lives in a 
 - Files up to 25 MB and 90,000 extracted characters.
 - A concise document summary.
 - Separate coverage and risk checks for scope, pricing, timelines, and non-standard commitments.
+- Exact source excerpts for each review dimension.
+- Optional comparison between an original proposal and a revised version.
+- Typed change detection for added, removed, modified, unchanged, or unclear terms.
+- A deterministic readiness score with before-and-after comparison.
 - Automatic cancellation of the previous request when a new document is selected.
 - In-memory processing with no application-level document persistence.
 

@@ -53,6 +53,8 @@ export default function AppointmentsPage() {
   const [listening, setListening] = useState(false);
   const [liveAnalyzing, setLiveAnalyzing] = useState(false);
   const [error, setError] = useState("");
+  // Refs expose current state to speech-recognition callbacks without recreating the
+  // browser recognition session after every render.
   const eventsRef = useRef<AgendaEvent[]>([]);
   const pendingRef = useRef<AgendaReply | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
@@ -67,6 +69,8 @@ export default function AppointmentsPage() {
   const sessionCounterRef = useRef(0);
 
   useEffect(() => {
+    // Agenda data is browser-local. Invalid or outdated storage is discarded instead
+    // of preventing the application from loading.
     try {
       const saved = localStorage.getItem("obra-personal-agenda");
       if (saved)
@@ -104,6 +108,8 @@ export default function AppointmentsPage() {
   );
 
   function mergeConversation(reply: AgendaReply) {
+    // Follow-up phrases such as "tomorrow at three" complete the current draft while
+    // preserving fields already understood in the previous turn.
     const previous = pendingRef.current;
     if (
       !previous ||
@@ -183,6 +189,8 @@ export default function AppointmentsPage() {
   }
 
   async function editCurrentPlan(query: string, plan: PlanReply) {
+    // While a plan is open, the same conversation becomes an editor. Commands can add,
+    // move, reprioritize, or remove draft tasks before any event is persisted.
     const context = planEvents(plan);
     const reply = await requestInterpretation(query, undefined, context, false);
     recordSession(reply, query);
@@ -378,6 +386,8 @@ export default function AppointmentsPage() {
     )
       return;
     lastAnalyzedTranscriptRef.current = transcript;
+    // Partial transcripts become stale quickly. Cancel the previous interpretation so
+    // only the newest spoken phrase can update the live preview.
     liveAbortRef.current?.abort();
     const controller = new AbortController();
     liveAbortRef.current = controller;
@@ -413,6 +423,8 @@ export default function AppointmentsPage() {
     )
       return;
     if (liveTimerRef.current) window.clearTimeout(liveTimerRef.current);
+    // Throttle continuous speech to avoid one API request per recognition event while
+    // still updating the preview during a longer utterance.
     const elapsed = Date.now() - lastLiveCallAtRef.current;
     const delay = Math.max(0, 1_500 - elapsed);
     liveTimerRef.current = window.setTimeout(() => {

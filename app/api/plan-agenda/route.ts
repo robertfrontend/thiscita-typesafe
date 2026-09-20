@@ -210,6 +210,8 @@ function splitCandidates(
   inferredParts?: string[],
   useFallback = false,
 ) {
+  // Explicit punctuation is handled first. TypeSafe boundary recovery is used only
+  // when a brain dump appears to contain multiple tasks without separators.
   const globalDate = dateFromMessage(message) ?? isoDate(new Date());
   const cleaned = brainDumpText(message);
   const explicitParts = cleaned.split(
@@ -307,6 +309,8 @@ function heuristicSignals(candidate: Candidate): Signals {
 }
 
 function priorityFromSignals(signals: Signals): Priority {
+  // Priority is a transparent application rule over reusable TypeSafe scores.
+  // Changing these weights does not require another inference request.
   const value = signals.urgency * 0.55 + signals.importance * 0.45;
   return value >= 1.35 ? "high" : value < 0.65 ? "low" : "medium";
 }
@@ -331,6 +335,8 @@ function schedule(
   signalMap: Record<string, Signals>,
   events: AgendaEvent[],
 ) {
+  // Scheduling remains deterministic: fixed times win, then open slots are searched
+  // in 15-minute increments without overlapping saved or newly planned events.
   const items = candidates.map((candidate) => {
     const signals = signalMap[candidate.id];
     const effort = effortFromScore(signals.effort);
@@ -461,6 +467,8 @@ export async function POST(request: Request) {
 
   if (candidates.length < 2 && client) {
     try {
+      // Each token gap is an independent yes/no boundary judgment. Local probabilities
+      // remain as a safety net for common verbs and appointment phrases.
       const tokens = brainDumpText(message)
         .split(/\s+/)
         .filter(Boolean)
@@ -572,6 +580,8 @@ export async function POST(request: Request) {
   if (!client) return NextResponse.json(fallback());
   try {
     const questions: Questions = {};
+    // TypeSafe evaluates planning signals, but does not choose a calendar slot or
+    // mutate the user's agenda. The scheduler below owns those actions.
     for (const candidate of candidates) {
       questions[`${candidate.id}_urgency`] = score(
         `How urgent is completing \`${candidate.id}\` on its stated day? Judge time pressure and consequence of delay, not general importance.`,

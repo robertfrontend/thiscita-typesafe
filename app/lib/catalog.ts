@@ -30,6 +30,8 @@ export type GovernmentService = {
 const verified = "2026-09-18";
 const rmv = "Massachusetts Registry of Motor Vehicles";
 
+// This catalog is the source of truth for resident-facing guidance. TypeSafe selects
+// entries from it, but never invents requirements, authorities, dates, or source URLs.
 export const services: GovernmentService[] = [
   {
     id: "license-renewal",

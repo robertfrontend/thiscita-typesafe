@@ -88,6 +88,8 @@ export function nextPlanTime(
   plan: PlannedItem[],
   savedEvents: AgendaEvent[],
 ) {
+  // Proposed and saved events share the same busy-slot list, preventing a new task
+  // from colliding with either committed events or other items in the current draft.
   const busy = [
     ...plan
       .filter((item) => item.date === date && item.time)
@@ -121,6 +123,8 @@ export function additionsForPlan(
   requestedDate: string | null,
   savedEvents: AgendaEvent[],
 ) {
+  // Added tasks receive fresh IDs and are rescheduled against the evolving draft.
+  // Nothing reaches localStorage until the user confirms the complete plan.
   const prepared: PlannedItem[] = [];
   const defaultDate =
     requestedDate ??
@@ -150,6 +154,8 @@ export function additionsForPlan(
 }
 
 export function calendarUrl(event: AgendaEvent) {
+  // Calendar export is a prefilled URL only; this application never writes directly
+  // to the user's Google Calendar account.
   const start = new Date(`${event.date}T${event.time}:00`);
   const end = new Date(start.getTime() + event.duration * 60_000);
   const stamp = (value: Date) =>

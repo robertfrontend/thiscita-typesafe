@@ -41,6 +41,8 @@ function makeNavigation(
   urgency = urgentLanguage(message),
   clarification = clarificationFor(message),
 ): Navigation {
+  // Candidate and primary thresholds are intentionally separate: uncertain matches
+  // may be shown as suggestions without claiming that one route is definitive.
   const matches = rawMatches
     .filter((match) => match.probability >= CANDIDATE_THRESHOLD)
     .sort((a, b) => b.probability - a.probability);
@@ -99,6 +101,8 @@ export async function POST(request: Request) {
     return NextResponse.json(fallback(message, startedAt));
 
   try {
+    // One independent Noul per catalog entry allows multi-service requests without
+    // forcing all services into a mutually exclusive classification.
     const questions = Object.fromEntries(
       services.map((service) => [
         `service_${service.id}`,
